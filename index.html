@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biobeat · Earth Information Jukebox</title>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/topojson-client.min.js"></script>
+<style>
+  :root {
+    --ink: #e8f1f5;
+    --muted: #93a8b5;
+    --accent: #35c6d6;
+    --accent-glow: rgba(53, 198, 214, 0.25);
+    --soft: #152733;
+    --line: #244556;
+    --bg: #07131b;
+    --panel: #0b1d28;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(ellipse at top, #0c2230 0%, var(--bg) 60%);
+    color: var(--ink);
+  }
+  .stage {
+    max-width: 1320px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 230px 1fr 280px;
+    gap: 1.25rem;
+    padding: 1.25rem 1.5rem;
+    min-height: 100vh;
+  }
+  @media (max-width: 900px) {
+    .stage { grid-template-columns: 1fr; }
+    main { order: -1; }
+  }
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0.2rem 0 0.75rem;
+    text-align: center;
+    color: #cfe9f2;
+  }
+  .brand {
+    text-align: center;
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: var(--accent);
+    margin: 0 0 0.5rem;
+    letter-spacing: 0.03em;
+  }
+  .list { display: flex; flex-direction: column; gap: 0.3rem; }
+  .list button {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    font: inherit;
+    font-size: 1.02rem;
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: 0.2s;
+  }
+  .list button:hover {
+    background: rgba(53, 198, 214, 0.12);
+    border-color: #3a7084;
+  }
+  .list button[aria-checked="true"] {
+    background: linear-gradient(135deg, rgba(53, 198, 214, 0.35), rgba(53, 198, 214, 0.12));
+    color: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent-glow) inset;
+  }
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 3px solid #7fefff;
+    outline-offset: 2px;
+  }
+  #map {
+    height: 360px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 0 30px var(--accent-glow) inset;
+  }
+  canvas {
+    width: 100%;
+    height: 170px;
+    display: block;
+    border-radius: 12px;
+    background: #061018;
+    border: 1px solid var(--line);
+  }
+  .controls {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.9rem;
+    align-items: center;
+    margin-top: 0.7rem;
+  }
+  .play-btn {
+    background: linear-gradient(135deg, #1fa7b8, #138492);
+    color: #fff;
+    border: 0;
+    border-radius: 999px;
+    padding: 0.6rem 1.3rem;
+    font: inherit;
+    cursor: pointer;
+    min-width: 8rem;
+    box-shadow: 0 4px 14px rgba(31, 167, 184, 0.25);
+  }
+  select {
+    font: inherit;
+    padding: 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--ink);
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .readout {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .readout b {
+    display: block;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 0 12px var(--accent-glow);
+  }
+  #status { margin: 0.4rem 0 0; min-height: 1.3rem; color: var(--muted); }
+  #status.error { color: #ff8b7a; }
+  .region-info {
+    margin-top: 0.5rem;
+    padding: 0.65rem 0.8rem;
+    background: rgba(10, 30, 42, 0.8);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-size: 0.86rem;
+    color: var(--muted);
+  }
+  .region-info b { color: #dff7fb; }
+  .hint { font-size: 0.82rem; color: #7f97a6; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- Hemisphere Navigation Panel -->
+  <nav aria-labelledby="hemiTitle">
+    <h2 id="hemiTitle">Hemisphere</h2>
+    <div class="list" id="hemiGroup" role="radiogroup" aria-labelledby="hemiTitle"></div>
+  </nav>
+
+  <!-- Main Telemetry & Visualization Stage -->
+  <main>
+    <p class="brand">Biobeat · Earth Information Jukebox</p>
+    <div id="map" role="application" aria-label="World Map: Analyzed hemisphere with radar sweep and sample points"></div>
+    <canvas id="viz" role="img" aria-label="Sonic and visual evolution of the selected track"></canvas>
+
+    <div class="controls">
+      <button class="play-btn" id="btnPlay" type="button" aria-label="Play">Play</button>
+      <input id="timeline" type="range" min="0" max="0" value="0" disabled aria-label="Timeline scrubber">
+      
+      <label for="speed">Playback Speed</label>
+      <select id="speed">
+        <option value="900">Slow</option>
+        <option value="350" selected>Medium</option>
+        <option value="120">Fast</option>
+      </select>
+
+      <label for="volume">Audio Volume</label>
+      <input id="volume" type="range" min="0" max="1" step="0.05" value="0.35">
+    </div>
+
+    <div class="readout" aria-live="polite" aria-atomic="true">
+      <div>Region<b id="rdPlace">–</b></div>
+      <div>Average Value<b id="rdValue">–</b></div>
+      <div>Frequency (Pitch)<b id="rdFreq">–</b></div>
+      <div>UTC Time<b id="rdTime" style="font-size:1.05rem">–</b></div>
+    </div>
+
+    <p id="status" role="status">Initializing telemetry...</p>
+    <div id="regionInfo" class="region-info" aria-live="polite">Active Region: –</div>
+    <p class="hint">The map highlights the selected hemisphere and sampling points; a radar sweep traverses the active zone. Real Meteomatics telemetry averaged across points.</p>
+  </main>
+
+  <!-- Climate Track Phenomenon Navigation Panel -->
+  <nav aria-labelledby="phTitle">
+    <h2 id="phTitle">Phenomenon</h2>
+    <div class="list" id="trackGroup" role="radiogroup" aria-labelledby="phTitle"></div>
+  </nav>
+
+</div>
+
+<script>
+/* ===== 1. API Client Module ===== */
+const ApiClient = {
+  async get(endpoint) {
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(errorPayload.detail || response.statusText);
+    }
+    return response.json();
+  },
+  config: () => ApiClient.get("/api/config"),
+  series: (track, hemisphere) => ApiClient.get(`/api/series?track=${encodeURIComponent(track)}&hemisphere=${encodeURIComponent(hemisphere)}`),
+};
+
+/* ===== 2. Audio Synthesis Module ===== */
+const TIMBRES = {
+  temp: { type: "triangle", label: "warm triangular" },
+  humid: { type: "sine", label: "smooth sinusoidal" },
+  wind: { type: "sawtooth", label: "aerial sawtooth" },
+  press: { type: "square", label: "deep square" },
+  rain: { type: "triangle", label: "precipitation triangle" },
+  sea: { type: "sine", label: "oceanic sinusoidal" },
+};
+
+const AudioEngine = (() => {
+  const FREQ_MIN = 90, FREQ_MAX = 1400;
+  let audioCtx, osc1, osc2, biquadFilter, gainNode, analyserNode, masterVolume = 0.35;
+
+  function initializeContext() {
+    if (audioCtx) return audioCtx.state === "suspended" ? audioCtx.resume() : null;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    osc1 = audioCtx.createOscillator();
+    osc1.type = "triangle";
+    
+    osc2 = audioCtx.createOscillator();
+    osc2.type = "sine";
+    
+    biquadFilter = audioCtx.createBiquadFilter();
+    biquadFilter.type = "lowpass";
+    biquadFilter.frequency.value = 1800;
+    
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0;
+    
+    const secondaryGain = audioCtx.createGain();
+    secondaryGain.gain.value = 0.18;
+    
+    analyserNode = audioCtx.createAnalyser();
+    analyserNode.fftSize = 512;
+
+    osc1.connect(biquadFilter);
+    osc2.connect(secondaryGain).connect(biquadFilter);
+    biquadFilter.connect(gainNode).connect(analyserNode).connect(audioCtx.destination);
+    
+    osc1.start();
+    osc2.start();
+  }
+
+  const mapToFrequency = (val, min, max) => 
+    FREQ_MIN * Math.pow(FREQ_MAX / FREQ_MIN, max === min ? 0.5 : (val - min) / (max - min));
+
+  return {
+    initializeContext,
+    mapToFrequency,
+    get analyser() { return analyserNode; },
+    setTimbre(trackKey) {
+      if (!audioCtx) return;
+      const timbreConfig = TIMBRES[trackKey] || { type: "triangle" };
+      osc1.type = timbreConfig.type;
+      biquadFilter.frequency.setTargetAtTime(
+        trackKey === "sea" || trackKey === "press" ? 1000 : 2200, 
+        audioCtx.currentTime, 
+        0.05
+      );
+    },
+    setVolume(vol) {
+      masterVolume = vol;
+      if (gainNode && gainNode.gain.value > 0) {
+        gainNode.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.02);
+      }
+    },
+    playTone(frequency) {
+      if (!audioCtx) return;
+      osc1.frequency.setTargetAtTime(frequency, audioCtx.currentTime, 0.05);
+      osc2.frequency.setTargetAtTime(frequency * 1.5, audioCtx.currentTime, 0.06);
+      gainNode.gain.setTargetAtTime(masterVolume, audioCtx.currentTime, 0.04);
+    },
+    silence() {
+      if (audioCtx) {
+        gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.04);
+      }
+    },
+    blip(frequency) {
+      this.playTone(frequency);
+      setTimeout(() => this.silence(), 240);
+    },
+  };
+})();
+
+/* ===== 3. Application State & Helpers ===== */
+const $ = id => document.getElementById(id);
+const State = {
+  config: null,
+  hemisphere: "north",
+  track: "temp",
+  data: null,
+  minValue: 0,
+  maxValue: 1,
+  currentIndex: 0,
+  timer: null,
+  scanAngle: 0,
+};
+
+function renderRadioGroup(container, itemsMap, currentKey, onSelection) {
+  container.innerHTML = "";
+  const keys = Object.keys(itemsMap);
+  keys.forEach((key, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("role", "radio");
+    btn.innerHTML = itemsMap[key].html;
+    btn.setAttribute("aria-checked", key === currentKey);
+    btn.tabIndex = (key === currentKey || (!keys.includes(currentKey) && index === 0)) ? 0 : -1;
+    
+    btn.onclick = () => {
+      onSelection(key);
+      renderRadioGroup(container, itemsMap, key, onSelection);
+      container.querySelector('[aria-checked="true"]').focus();
+    };
+    
+    btn.onkeydown = event => {
+      const direction = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+      if (direction) {
+        event.preventDefault();
+        container.children[(index + direction + keys.length) % keys.length].click();
+      }
+    };
+    container.appendChild(btn);
+  });
+}
+
+function updateStatus(message, isError = false) {
+  const statusEl = $("status");
+  statusEl.textContent = message;
+  statusEl.className = isError ? "error" : "";
+}
+
+/* ===== 4. Leaflet Map Management Module ===== */
+const worldMap = L.map("map", { minZoom: 1, zoomControl: false, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1 }).setView([20, 0], 1);
+worldMap.getContainer().style.background = "#041019";
+
+fetch("vendor/countries-50m.json")
+  .then(res => res.json())
+  .then(topoData => {
+    L.geoJSON(topojson.feature(topoData, topoData.objects.countries), {
+      interactive: false,
+      style: { color: "#1e4f63", weight: 0.7, fillColor: "#0a2230", fillOpacity: 1 }
+    }).addTo(worldMap);
+  });
+
+let regionLayer = null;
+let samplePointMarkers = [];
+let scanLineObj = null;
+let scanCircleObj = null;
+
+function displayRegion(region) {
+  if (regionLayer) regionLayer.remove();
+  regionLayer = L.layerGroup();
+  samplePointMarkers = [];
+
+  if (region && region.bounds) {
+    L.rectangle(region.bounds, {
+      color: "#35c6d6",
+      weight: 2.2,
+      fill: true,
+      fillColor: "#35c6d6",
+      fillOpacity: 0.08,
+      dashArray: "6 6"
+    }).addTo(regionLayer);
+
+    const centerLat = (region.bounds[0][0] + region.bounds[1][0]) / 2;
+    const centerLon = (region.bounds[0][1] + region.bounds[1][1]) / 2;
+    
+    scanCircleObj = L.circle([centerLat, centerLon], {
+      radius: 3200000,
+      color: "rgba(53,198,214,.25)",
+      weight: 1,
+      fill: false,
+      dashArray: "4 8"
+    }).addTo(regionLayer);
+
+    scanLineObj = L.polyline([[centerLat, centerLon], [centerLat, centerLon]], {
+      color: "#7fefff",
+      weight: 2.5,
+      opacity: 0.9
+    }).addTo(regionLayer);
+  }
+
+  if (region && region.points) {
+    region.points.forEach(pt => {
+      const marker = L.circleMarker([pt[0], pt[1]], {
+        radius: 7,
+        color: "#fff",
+        weight: 2,
+        fillColor: "#ff7a59",
+        fillOpacity: 0.95
+      }).bindTooltip(`Sample Point: ${pt[0].toFixed(2)}, ${pt[1].toFixed(2)}`, { direction: "top" });
+      
+      marker.addTo(regionLayer);
+      samplePointMarkers.push(marker);
+    });
+  }
+  regionLayer.addTo(worldMap);
+}
+
+function displayRegion(region) {
+  if (regionLayer) regionLayer.remove();
+  regionLayer = L.layerGroup();
+  samplePointMarkers = [];
+
+  if (region && region.bounds) {
+    L.rectangle(region.bounds, {
+      color: "#35c6d6",
+      weight: 2.2,
+      fill: true,
+      fillColor: "#35c6d6",
+      fillOpacity: 0.08,
+      dashArray: "6 6"
+    }).addTo(regionLayer);
+
+    const centerLat = (region.bounds[0][0] + region.bounds[1][0]) / 2;
+    const centerLon = (region.bounds[0][1] + region.bounds[1][1]) / 2;
+    
+    // Expanded radius to span the entire hemispheric sector visually
+    scanCircleObj = L.circle([centerLat, centerLon], {
+      radius: 4800000,
+      color: "rgba(53,198,214,.25)",
+      weight: 1,
+      fill: false,
+      dashArray: "4 8"
+    }).addTo(regionLayer);
+
+    scanLineObj = L.polyline([[centerLat, centerLon], [centerLat, centerLon]], {
+      color: "#7fefff",
+      weight: 2.5,
+      opacity: 0.9
+    }).addTo(regionLayer);
+  }
+
+  if (region && region.points) {
+    region.points.forEach(pt => {
+      const marker = L.circleMarker([pt[0], pt[1]], {
+        radius: 7,
+        color: "#fff",
+        weight: 2,
+        fillColor: "#ff7a59",
+        fillOpacity: 0.95
+      }).bindTooltip(`Sample Point: ${pt[0].toFixed(2)}, ${pt[1].toFixed(2)}`, { direction: "top" });
+      
+      marker.addTo(regionLayer);
+      samplePointMarkers.push(marker);
+    });
+  }
+  regionLayer.addTo(worldMap);
+}
+
+function selectHemisphere(hemisphereKey, flyToLocation = true) {
+  State.hemisphere = hemisphereKey;
+  renderRadioGroup(
+    $("hemiGroup"),
+    Object.fromEntries(Object.entries(State.config.hemispheres).map(([k, v]) => [k, { html: v.label }])),
+    hemisphereKey,
+    k => { selectHemisphere(k, true); loadSeriesData(); }
+  );
+  if (flyToLocation) {
+    worldMap.flyTo(hemisphereKey === "north" ? [30, 10] : [-25, 20], 1.6);
+  }
+}
+
+/* ===== 5. Data Retrieval & Rendering ===== */
+async function loadSeriesData() {
+  pausePlayback();
+  AudioEngine.silence();
+  $("regionInfoinnerHTML" in $("regionInfo") ? "regionInfo" : "regionInfo").innerHTML = "Active Region: Querying real-time telemetry and computing spatial average...";
+  updateStatus("Querying Meteomatics API and computing spatial averages...");
+  
+  try {
+    const telemetry = await ApiClient.series(State.track, State.hemisphere);
+    const validValues = telemetry.values.filter(v => v !== null && !isNaN(v));
+    
+    if (validValues.length === 0) {
+      throw new Error("No telemetry data returned for this region and track combination.");
+    }
+    
+    State.data = telemetry;
+    State.minValue = Math.min(...validValues);
+    State.maxValue = Math.max(...validValues);
+    State.currentIndex = 0;
+    
+    const timelineEl = $("timeline");
+    timelineEl.max = telemetry.values.length - 1;
+    timelineEl.value = 0;
+    timelineEl.disabled = false;
+    
+    displayRegion(telemetry.region);
+    
+    const coordinatesText = (telemetry.region.points || []).map(p => `(${p[0].toFixed(1)}, ${p[1].toFixed(1)})`).join(", ");
+    $("regionInfo").innerHTML = `<b>Analyzed Region:</b> ${telemetry.region.label}<br>` +
+      `<b>Scope:</b> Highlighted hemisphere · <b>${telemetry.region.samples} sample points</b> averaged<br>` +
+      `<b>Parameter:</b> ${telemetry.param} · <b>Coordinates:</b> ${coordinatesText}<br>` +
+      `<b>Source:</b> Meteomatics (hourly time series, spatial average). Observed Range: ${State.minValue}–${State.maxValue} ${telemetry.unit}`;
+    
+    updateStatus(`${State.config.tracks[State.track].label} · ${telemetry.region.label} · ${telemetry.region.samples} points · Timbre: ${(TIMBRES[State.track] || {}).label || "base"}`);
+    renderFrame();
+  } catch (error) {
+    State.data = null;
+    $("timeline").disabled = true;
+    updateStatus("Error: " + error.message, true);
+    $("regionInfo").textContent = "Could not resolve active telemetry region.";
+  }
+}
+
+function renderFrame(triggerSound = false) {
+  if (!State.data) return;
+  const val = State.data.values[State.currentIndex];
+  const freq = AudioEngine.mapToFrequency(val, State.minValue, State.maxValue);
+  
+  $("rdPlace").textContent = State.data.region.label;
+  $("rdValue").textContent = `${val} ${State.data.unit}`;
+  $("rdFreq").textContent = `${freq.toFixed(0)} Hz`;
+  $("rdTime").textContent = State.data.dates[State.currentIndex].replace("T", " ").slice(5, 16);
+  
+  const timelineEl = $("timeline");
+  timelineEl.value = State.currentIndex;
+  timelineEl.setAttribute("aria-valuetext", `${$("rdTime").textContent}, ${val} ${State.data.unit}`);
+  
+  if (triggerSound) {
+    State.timer ? AudioEngine.playTone(freq) : AudioEngine.blip(freq);
+  }
+}
+
+/* ===== 6. Playback Control Module ===== */
+function startPlayback() {
+  if (!State.data) return;
+  AudioEngine.initializeContext();
+  AudioEngine.setTimbre(State.track);
+  AudioEngine.setVolume(+ $("volume").value);
+  
+  if (State.currentIndex >= State.data.values.length - 1) {
+    State.currentIndex = 0;
+  }
+  
+  const playBtn = $("btnPlay");
+  playBtn.textContent = "Pause";
+  playBtn.setAttribute("aria-label", "Pause playback");
+  
+  State.timer = setInterval(() => {
+    if (State.currentIndex >= State.data.values.length - 1) {
+      return pausePlayback();
+    }
+    State.currentIndex++;
+    renderFrame(true);
+  }, +$("speed").value);
+  
+  renderFrame(true);
+}
+
+function pausePlayback() {
+  clearInterval(State.timer);
+  State.timer = null;
+  AudioEngine.silence();
+  const playBtn = $("btnPlay");
+  playBtn.textContent = "Play";
+  playBtn.setAttribute("aria-label", "Play playback");
+}
+
+$("btnPlay").onclick = () => State.timer ? pausePlayback() : startPlayback();
+$("speed").onchange = () => { if (State.timer) { pausePlayback(); startPlayback(); } };
+$("volume").oninput = event => AudioEngine.setVolume(+event.target.value);
+$("timeline").oninput = event => {
+  AudioEngine.initializeContext();
+  AudioEngine.setTimbre(State.track);
+  State.currentIndex = +event.target.value;
+  renderFrame(true);
+};
+
+document.addEventListener("keydown", event => {
+  if (event.code === "Space" && !["BUTTON", "INPUT", "SELECT"].includes(document.activeElement.tagName)) {
+    event.preventDefault();
+    $("btnPlay").click();
+  }
+});
+
+/* ===== 7. Canvas Visualizer Module ===== */
+const canvasEl = $("viz"), canvasCtx = canvasEl.getContext("2d");
+const WAVE_COLORS = ["#35c6d6", "#7fefff", "#ff7a59"];
+
+function drawVisualizer(timestamp) {
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvasEl.width = canvasEl.clientWidth * dpr;
+  const height = canvasEl.height = canvasEl.clientHeight * dpr;
+  
+  canvasCtx.clearRect(0, 0, width, height);
+  const backgroundGrad = canvasCtx.createLinearGradient(0, 0, 0, height);
+  backgroundGrad.addColorStop(0, "#071722");
+  backgroundGrad.addColorStop(1, "#040b10");
+  canvasCtx.fillStyle = backgroundGrad;
+  canvasCtx.fillRect(0, 0, width, height);
+
+  if (State.data) {
+    const values = State.data.values;
+    const range = (State.maxValue - State.minValue) || 1;
+    const xNow = (values.length > 1 ? State.currentIndex / (values.length - 1) : 0) * width;
+    const getY = v => height - 14 - (((v ?? State.minValue) - State.minValue) / range) * (height - 28);
+    
+    // Draw area under curve
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(0, height);
+    values.forEach((v, idx) => {
+      const x = idx / (values.length - 1 || 1) * width;
+      canvasCtx.lineTo(x, getY(v ?? State.minValue));
+    });
+    canvasCtx.lineTo(width, height);
+    canvasCtx.closePath();
+    
+    const fillGrad = canvasCtx.createLinearGradient(0, 0, 0, height);
+    fillGrad.addColorStop(0, "rgba(53,198,214,.35)");
+    fillGrad.addColorStop(1, "rgba(53,198,214,.02)");
+    canvasCtx.fillStyle = fillGrad;
+    canvasCtx.fill();
+
+    // Draw main line curve
+    canvasCtx.strokeStyle = "rgba(127,239,255,.25)";
+    canvasCtx.lineWidth = 2 * dpr;
+    canvasCtx.beginPath();
+    values.forEach((v, idx) => {
+      const x = idx / (values.length - 1 || 1) * width;
+      idx ? canvasCtx.lineTo(x, getY(v ?? State.minValue)) : canvasCtx.moveTo(x, getY(v ?? State.minValue));
+    });
+    canvasCtx.stroke();
+
+    // Draw active progress stroke
+    canvasCtx.strokeStyle = "#35c6d6";
+    canvasCtx.lineWidth = 3.5 * dpr;
+    canvasCtx.shadowColor = "rgba(53,198,214,.6)";
+    canvasCtx.shadowBlur = 10 * dpr;
+    canvasCtx.beginPath();
+    values.slice(0, State.currentIndex + 1).forEach((v, idx) => {
+      const x = idx / (values.length - 1 || 1) * width;
+      idx ? canvasCtx.lineTo(x, getY(v ?? State.minValue)) : canvasCtx.moveTo(x, getY(v ?? State.minValue));
+    });
+    canvasCtx.stroke();
+    canvasCtx.shadowBlur = 0;
+
+    // Playhead indicator
+    canvasCtx.fillStyle = "rgba(255,122,89,.95)";
+    canvasCtx.fillRect(xNow - 2 * dpr, 0, 4 * dpr, height);
+    canvasCtx.beginPath();
+    canvasCtx.arc(xNow, getY(values[State.currentIndex] ?? State.minValue), 6 * dpr, 0, Math.PI * 2);
+    canvasCtx.fillStyle = "#ff7a59";
+    canvasCtx.fill();
+    canvasCtx.strokeStyle = "#fff";
+    canvasCtx.lineWidth = 2 * dpr;
+    canvasCtx.stroke();
+  }
+
+  // Draw audio waveforms from analyser node
+  const analyser = AudioEngine.analyser;
+  const timeDataBuf = analyser ? new Uint8Array(analyser.fftSize) : null;
+  if (analyser) analyser.getByteTimeDomainData(timeDataBuf);
+
+  WAVE_COLORS.forEach((color, i) => {
+    canvasCtx.strokeStyle = color;
+    canvasCtx.globalAlpha = i === 0 ? 0.9 : 0.35;
+    canvasCtx.lineWidth = (i === 0 ? 2.5 : 1.5) * dpr;
+    canvasCtx.beginPath();
+    for (let x = 0; x <= width; x += 4) {
+      const sample = timeDataBuf ? (timeDataBuf[Math.floor(x / width * (timeDataBuf.length - 1))] - 128) / 128 : 0;
+      const y = height / 2 + sample * height * 0.3 + Math.sin(x / width * 10 + timestamp / 500 + i * 1.3) * 6 * dpr;
+      x ? canvasCtx.lineTo(x, y) : canvasCtx.moveTo(x, y);
+    }
+    canvasCtx.stroke();
+  });
+  canvasCtx.globalAlpha = 1;
+  requestAnimationFrame(drawVisualizer);
+}
+
+/* ===== 8. Application Bootstrap ===== */
+(async function bootApplication() {
+  try {
+    State.config = await ApiClient.config();
+    renderRadioGroup(
+      $("hemiGroup"),
+      Object.fromEntries(Object.entries(State.config.hemispheres).map(([k, v]) => [k, { html: v.label }])),
+      State.hemisphere,
+      k => { selectHemisphere(k, true); loadSeriesData(); }
+    );
+    renderRadioGroup(
+      $("trackGroup"),
+      Object.fromEntries(Object.entries(State.config.tracks).map(([k, t]) => [k, { html: t.label }])),
+      State.track,
+      k => { State.track = k; AudioEngine.initializeContext(); AudioEngine.setTimbre(k); loadSeriesData(); }
+    );
+    selectHemisphere(State.hemisphere, false);
+    requestAnimationFrame(drawVisualizer);
+    requestAnimationFrame(animateRadarScan);
+    loadSeriesData();
+  } catch (err) {
+    updateStatus("Failed to connect to backend server: " + err.message, true);
+  }
+})();
+</script>
+</body>
+</html>
